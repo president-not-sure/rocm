@@ -1,0 +1,102 @@
+---
+name: Publish image
+on:
+  schedule:
+    # Every monday at 00:00
+    - cron: '0 0 * * MON'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  NAMESPACE: ${{ github.repository_owner }}
+  IMAGE: ${{ github.event.repository.name }}
+  SHA: ${{ github.sha }}
+  DESCRIPTION: "ROCm container"
+  LICENSE: MIT
+
+jobs:
+  publish:
+    name: Publish image
+    runs-on: ubuntu-24.04
+    continue-on-error: false
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Lowercase namespace
+      run: |
+        # Work-around: docker repositories are lowercase only
+        echo "NAMESPACE=${NAMESPACE@L}" >> "$GITHUB_ENV"
+
+    - name: Tags
+      run: |
+        echo "T1=latest" >> "$GITHUB_ENV"
+        timestamp="$(date --utc --iso-8601=second | sed 's/.....$//g' | sed 's/[-+:]//g')Z"
+        echo "T2=${timestamp}" >> "$GITHUB_ENV"
+        short_sha="$(echo "$SHA" | sed --regexp-extended 's/^(.{7}).*/\1/')"
+        echo "T3=${short_sha}" >> "$GITHUB_ENV"
+
+    - name: Labels
+      run: |
+        timestamp="$(date --utc +'%Y-%d-%mT%H:%M:%S.%3NZ')"
+        echo "L1=org.opencontainers.image.created=${timestamp}" >> "$GITHUB_ENV"
+        echo "L2=org.opencontainers.image.description=${DESCRIPTION}" >> "$GITHUB_ENV"
+        echo "L3=org.opencontainers.image.licenses=${LICENSE}" >> "$GITHUB_ENV"
+        echo "L4=org.opencontainers.image.revision=${SHA}" >> "$GITHUB_ENV"
+        echo "L5=org.opencontainers.image.source=https://github.com/${NAMESPACE}/${IMAGE}" >> "$GITHUB_ENV"
+        echo "L6=org.opencontainers.image.title=${IMAGE}" >> "$GITHUB_ENV"
+        echo "L7=org.opencontainers.image.url=https://github.com/${NAMESPACE}/${IMAGE}" >> "$GITHUB_ENV"
+        echo "L8=org.opencontainers.image.version=latest" >> "$GITHUB_ENV"
+
+    - name: Build image
+      id: build
+      run: |
+        podman build \
+          --file="${IMAGE}.Containerfile" \
+          --label="${L1}" \
+          --label="${L2}" \
+          --label="${L3}" \
+          --label="${L4}" \
+          --label="${L5}" \
+          --label="${L6}" \
+          --label="${L7}" \
+          --label="${L8}" \
+          --format=oci \
+          --tls-verify=true \
+          --layers=true \
+          --tag="localhost/${IMAGE}:${T1}" \
+          --tag="localhost/${IMAGE}:${T2}" \
+          --tag="localhost/${IMAGE}:${T3}" \
+          .
+
+    - name: Publish preparation
+      run: |
+        # Allow skopeo to read and write the container sigstore signatures
+        sudo mkdir --parents /etc/containers/registries.d/
+        sudo bash -c "printf  \
+          'docker:\n    %s:\n        use-sigstore-attachments: true\n' \
+          ${REGISTRY}/${NAMESPACE} \
+          > /etc/containers/registries.d/${REGISTRY}-${NAMESPACE}.yaml"
+
+        # Put private key in tmpfs
+        echo "${{ secrets.SKOPEO_PRIVATE_KEY }}" > /dev/shm/skopeo.key
+
+    - name: Publish
+      id: publish
+      run: |
+        tags=("$T1" "$T2" "$T3")
+        for tag in "${tags[@]}"; do
+          podman push \
+            --disable-content-trust \
+            --format=oci \
+            --sign-by-sigstore-private-key=/dev/shm/skopeo.key \
+            --creds="${{ github.actor }}:${{ github.token }}" \
+            "localhost/${IMAGE}:${tag}" \
+            "${REGISTRY}/${NAMESPACE}/${IMAGE}:${tag}"
+        done
