@@ -90,8 +90,7 @@ jobs:
     - name: Publish
       id: publish
       run: |
-        tags=("$T1" "$T2" "$T3")
-        for tag in "${tags[@]}"; do
+        for tag in "$T1" "$T2" "$T3"; do
           podman push \
             --disable-content-trust \
             --format=oci \
