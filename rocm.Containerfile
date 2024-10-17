@@ -90,7 +90,7 @@ RUN . venv/bin/activate && \
 
 RUN echo "Installing ROCm repo" && \
     cd /workdir && \
-    VERSION_CODENAME="$(grep VERSION_CODENAME /etc/os-release | sed 's/VERSION_CODENAME=//')" && \
+    . /etc/os-release && \
     wget "https://repo.radeon.com/amdgpu/latest/ubuntu/dists/$VERSION_CODENAME/Release" && \
     AMDGPU_VERSION="$(grep 'Version:' Release | sed 's/.* //')" && \
     wget "https://repo.radeon.com/rocm/apt/latest/dists/$VERSION_CODENAME/Release" && \
